@@ -1,0 +1,14 @@
+{
+  "width": 6,
+  "height": 2,
+  "max_steps": 16,
+  "node_budget": 20000,
+  "vehicles": [
+    {"id": "a", "start": {"x": 0, "y": 0}, "goal": {"x": 5, "y": 0}},
+    {"id": "b", "start": {"x": 1, "y": 1}, "goal": {"x": 0, "y": 1}}
+  ],
+  "tasks": [
+    {"id": "t1", "cell": {"x": 1, "y": 0}, "vehicles": ["a", "b"], "earliest_start": 0, "latest_finish": 12, "dwell": 1},
+    {"id": "t2", "cell": {"x": 4, "y": 0}, "vehicles": ["a", "b"], "earliest_start": 0, "latest_finish": 12, "dwell": 1}
+  ]
+}

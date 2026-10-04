@@ -138,6 +138,15 @@ func lowLevel(grid *Grid, start, goal Cell, cs *constraintSet, maxSteps int) (pa
 	if cs.vertexBlocked(start, 0) {
 		return nil, 0, false
 	}
+	// A vehicle already on its goal parks from time 0; it never drives
+	// away and comes back. If a constraint touches the goal at any
+	// time, the branch is infeasible for this vehicle.
+	if start == goal {
+		if cs.futureSafe(goal, 0) {
+			return []Cell{start}, 0, true
+		}
+		return nil, 0, false
+	}
 
 	type state struct {
 		cell Cell

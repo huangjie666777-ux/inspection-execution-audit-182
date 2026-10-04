@@ -37,6 +37,44 @@ type PlanResponse struct {
 	Vehicles  []VehiclePath `json:"vehicles,omitempty"`
 }
 
+// TaskSpec describes one inspection job in a POST /inspect request.
+type TaskSpec struct {
+	ID            string   `json:"id"`
+	Cell          Cell     `json:"cell"`
+	Vehicles      []string `json:"vehicles"`
+	EarliestStart int      `json:"earliest_start"`
+	LatestFinish  int      `json:"latest_finish"`
+	Dwell         int      `json:"dwell"`
+}
+
+// InspectRequest is the JSON body accepted by POST /inspect.
+type InspectRequest struct {
+	Width      int           `json:"width"`
+	Height     int           `json:"height"`
+	Obstacles  []Cell        `json:"obstacles"`
+	Vehicles   []VehicleSpec `json:"vehicles"`
+	Tasks      []TaskSpec    `json:"tasks"`
+	MaxSteps   int           `json:"max_steps"`
+	NodeBudget int           `json:"node_budget"`
+}
+
+// InspectAssignment reports the job and route of one vehicle.
+type InspectAssignment struct {
+	VehicleID   string `json:"vehicle_id"`
+	TaskID      string `json:"task_id"`
+	JobStart    int    `json:"job_start"`
+	JobFinish   int    `json:"job_finish"`
+	Path        []Cell `json:"path"`
+	ParkingTime int    `json:"parking_time"`
+}
+
+// InspectResponse is the JSON body returned by POST /inspect.
+type InspectResponse struct {
+	Status      string              `json:"status"`
+	TotalCost   int                 `json:"total_cost,omitempty"`
+	Assignments []InspectAssignment `json:"assignments,omitempty"`
+}
+
 const (
 	StatusSuccess    = "success"
 	StatusNoSolution = "no_solution"
@@ -48,6 +86,13 @@ const (
 	maxVehicles   = 5
 	maxStepsLimit = 64
 	maxBudget     = 20000
+)
+
+const (
+	maxInspectVehicles = 3
+	maxWindowTime      = 64
+	minDwell           = 1
+	maxDwell           = 8
 )
 
 // Grid holds the static map shared by the planners.
