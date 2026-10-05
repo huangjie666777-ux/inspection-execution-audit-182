@@ -11,10 +11,21 @@ import (
 // newRouter wires the HTTP API. Each request gets an independent planner
 // run: constraints and node budget live entirely inside solveCBS.
 func newRouter() http.Handler {
+	return newRouterWithStore(newExecStore("", 0, 0))
+}
+
+// newRouterWithStore wires the HTTP API against a concrete execution
+// store (persistent when the store has a directory, memory-only
+// otherwise).
+func newRouterWithStore(store *execStore) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
 	r.Post("/plan", planHandler)
 	r.Post("/inspect", inspectHandler)
+	r.Post("/executions", store.createExecutionHandler)
+	r.Get("/executions/{id}", store.getExecutionHandler)
+	r.Post("/executions/{id}/observations", store.addObservationsHandler)
+	r.Post("/executions/{id}/seal", store.sealExecutionHandler)
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))

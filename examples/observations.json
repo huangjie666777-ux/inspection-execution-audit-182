@@ -1,0 +1,10 @@
+{
+  "observations": [
+    {"vehicle_id": "a", "time": 2, "cell": {"x": 2, "y": 0}},
+    {"vehicle_id": "a", "time": 0, "cell": {"x": 0, "y": 0}},
+    {"vehicle_id": "a", "time": 1, "cell": {"x": 1, "y": 0}},
+    {"vehicle_id": "b", "time": 1, "cell": {"x": 1, "y": 1}},
+    {"vehicle_id": "b", "time": 0, "cell": {"x": 1, "y": 1}}
+  ]
+}
+
