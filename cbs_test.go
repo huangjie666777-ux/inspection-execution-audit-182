@@ -59,13 +59,6 @@ func checkPlan(t *testing.T, req *PlanRequest, paths [][]Cell, arrivals []int, m
 	}
 }
 
-func abs(x int) int {
-	if x < 0 {
-		return -x
-	}
-	return x
-}
-
 func TestSingleVehicleStraightLine(t *testing.T) {
 	req := &PlanRequest{
 		Width: 5, Height: 1, MaxSteps: 10, NodeBudget: 100,

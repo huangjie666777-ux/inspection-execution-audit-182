@@ -6,7 +6,12 @@
 
 ```bash
 go build -o bin/server .
-PORT=8080 ./bin/server   # PORT 环境变量配置本机端口，默认 8080
+PORT=8080 DATA_DIR=./data ./bin/server
+# PORT：监听端口，默认 8080
+# DATA_DIR：执行记录目录；留空时仅保存在进程内存中
+# MAX_EXECUTIONS：最多保留执行数，默认 1000
+# MAX_INFLIGHT_PLANS：最多并发求解数，默认 8
+# MAX_REQUEST_BODY_BYTES：请求体上限，默认 1048576
 ```
 
 ## 模型假设（点车辆近似）
@@ -81,7 +86,13 @@ PORT=8080 ./bin/server   # PORT 环境变量配置本机端口，默认 8080
      "vehicles": ["a", "b"],          // 可执行车 ID 集合，非空，均须已知
      "earliest_start": 0,             // 最早开始时刻 0..64
      "latest_finish": 12,             // 最晚完成时刻 0..64，不得早于 earliest_start
-     "dwell": 1}                      // 驻留步数 1..8
+     "dwell": 1},                     // 驻留步数 1..8
+    {"id": "t2",
+     "cell": {"x": 4, "y": 0},
+     "vehicles": ["a", "b"],
+     "earliest_start": 0,
+     "latest_finish": 12,
+     "dwell": 1}
   ]
 }
 ```
@@ -118,6 +129,92 @@ PORT=8080 ./bin/server   # PORT 环境变量配置本机端口，默认 8080
 
 客户端断开（HTTP 请求取消）会中止该次 CBS 计算。每个请求的约束集与节点预算完全独立，并发请求互不影响。
 
+## 实际执行核验
+
+`/inspect` 仍然只返回规划结果，不创建执行。执行接口接收相同的巡检请求体，并再次调用现有求解器；只有 HTTP 体内求解状态为 `success` 时才创建执行 ID。客户端不能提交自造的地图、任务、分配或路线。
+
+核验时刻范围固定为 `0..max_steps`。方案中的路线只保存到停车时刻；停车后的计划位置按终点坐标延展，直到 `max_steps`。
+
+### POST /inspect/executions
+
+请求体与 `POST /inspect` 完全相同。成功时返回 201：
+
+```json
+{
+  "execution_id": "exec_...",
+  "status": "success",
+  "plan": {"max_steps": 16, "vehicles": [
+    {"vehicle_id": "a", "task_id": "t2", "job_start": 4, "job_finish": 5,
+     "parking_time": 6, "path": []}
+  ]}
+}
+```
+
+`no_solution` 与 `undecided` 不创建执行 ID，返回 200 和对应状态；达到执行数量上限返回 429。
+
+### POST /inspect/executions/{id}/observations
+
+请求体：
+
+```json
+{"observations": [
+  {"vehicle_id": "a", "time": 0, "cell": {"x": 0, "y": 0}},
+  {"vehicle_id": "b", "time": 0, "cell": {"x": 1, "y": 1}}
+]}
+```
+
+- 批次内及已保存数据均按 `(vehicle_id,time)` 去重；同位置重复为幂等，异位置冲突，冲突返回 409。
+- 未知车辆、时刻不在 `0..max_steps`、坐标越界都会整批拒绝，不保存该批任何记录。
+- 障碍位置是合法上报坐标，会被保存并生成 `obstacle` 证据；同格、迎面交换、非法移动、错误起点和偏离计划也保留为证据。
+- 相邻完整观测仅允许曼哈顿距离为 0 或 1。中间有缺测时只列缺测区间，不做插值、不照抄计划、不断言缺口内安全。
+- 观测可以乱序、分批提交；响应携带当前核验报告，但未封存前不冻结。
+
+### GET /inspect/executions/{id}
+
+返回一致的执行快照：固定计划、已按车辆和时刻排序的观测，以及当前报告。
+
+### POST /inspect/executions/{id}/seal
+
+封存时计算并持久化最终报告，之后上报返回 409。重复封存不重新计算，返回第一次封存的同一报告。上报、查询和封存通过同一存储互斥串行提交，避免封存与写入交错。
+
+记录按执行 ID 保存为 `DATA_DIR/<execution_id>.json`：先写临时文件再原子改名。若持久化写失败，内存状态不变，也不会产生部分执行记录；配置 `DATA_DIR` 后重启可恢复观测、报告和封存状态。
+
+### 报告语义
+
+顶层 `status`：
+
+- `passed`：`0..max_steps` 对每辆车均有完整观测，任务均证明完成，且没有任何证据。
+- `failed`：存在已知违规证据，或某车辆有完整观测但仍未完成其固定分配任务。
+- `unknown`：没有已知失败证据，但存在缺测区间；此时任务可能为 `unknown`，缺测不能推断为安全。
+
+驻留证明要求在分配车辆的作业格上，于窗口内连续观测 `dwell+1` 个时刻（开始时刻到开始+dwell），表示实际驻留 `dwell` 步。任务结果返回找到的最早有效起止；完整观测但不存在有效区间为 `incomplete`，观测不全且未找到证据为 `unknown`。
+
+证据会明确车辆或车辆对、时刻与位置，类型包括：`start_mismatch`、`plan_deviation`、`obstacle`、`movement_violation`、`vertex_conflict`、`edge_swap`。
+
+### curl 演示
+
+```bash
+# 1. 由服务端求解并创建执行
+ID=$(curl -s localhost:8080/inspect/executions \
+  -H 'Content-Type: application/json' \
+  -d @examples/inspect.json \
+  | sed -n 's/.*"execution_id": *"\([^"]*\)".*/\1/p')
+
+# 2. 乱序补报；障碍/违规坐标会作为证据保存，坐标越界才整批拒绝
+curl -s localhost:8080/inspect/executions/$ID/observations \
+  -H 'Content-Type: application/json' \
+  -d '{"observations":[
+    {"vehicle_id":"b","time":0,"cell":{"x":1,"y":1}},
+    {"vehicle_id":"a","time":0,"cell":{"x":0,"y":0}}
+  ]}'
+
+# 3. 查询当前快照和核验报告（缺测时 status=unknown）
+curl -s localhost:8080/inspect/executions/$ID
+
+# 4. 封存最终报告；重复执行仍返回同一封存报告
+curl -s -X POST localhost:8080/inspect/executions/$ID/seal
+```
+
 ## 示例
 
 ```bash
@@ -140,7 +237,9 @@ curl -s localhost:8080/inspect -d @examples/inspect.json
 - `cbs.go`：CBS 高层冲突检测、分支约束与按总代价的联合搜索
 - `task_lowlevel.go`：巡检阶段化（赴作业点/驻留/赴终点）单车 A* 寻路
 - `task_cbs.go`：任务分配枚举与共享预算的跨分配 CBS 联合优化
-- `server.go` / `main.go`：Chi 路由、HTTP 处理与可配置端口启动
+- `execution.go` / `verifier.go`：执行快照、观测核验、缺测区间、任务证明与报告状态
+- `store.go`：执行互斥、原子持久化、重启恢复与执行数量限制
+- `server.go` / `main.go`：Chi 路由、HTTP 处理、容量限制与可配置端口/数据目录启动
 
 ## 测试
 
@@ -148,4 +247,4 @@ curl -s localhost:8080/inspect -d @examples/inspect.json
 go test ./...
 ```
 
-覆盖参数校验、单车寻路、边冲突禁止、到达后占格、协调换边、无解穷尽、预算未决、请求取消、起点即终点停车、任务校验、驻留窗口、分配最优性与强制分配。
+覆盖参数校验、单车寻路、边冲突禁止、到达后占格、协调换边、无解穷尽、预算未决、请求取消、起点即终点停车、任务校验、驻留窗口、分配最优性、强制分配、乱序观测、整批拒绝、幂等/冲突、证据保留、缺测未知、封存拒绝写入、重复封存与持久化恢复。

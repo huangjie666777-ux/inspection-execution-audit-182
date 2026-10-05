@@ -13,5 +13,11 @@ func main() {
 	}
 	addr := ":" + port
 	log.Printf("inspection-fleet-routing listening on %s", addr)
-	log.Fatal(http.ListenAndServe(addr, newRouter()))
+	dataDir := os.Getenv("DATA_DIR")
+	app, err := newApp(dataDir, envInt("MAX_EXECUTIONS", defaultMaxExecutions), envInt("MAX_INFLIGHT_PLANS", defaultMaxInFlight))
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("execution data directory: %s", dataDir)
+	log.Fatal(http.ListenAndServe(addr, newAppRouter(app)))
 }
